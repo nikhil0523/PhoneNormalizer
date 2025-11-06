@@ -80,8 +80,8 @@ def load_external_country_codes(file_path):
         return {}, set()
 
 
-COUNTRY_CODES_FILE = "C:\\Users\\nikhi\\Downloads\\Country_codes.xlsx"
-#COUNTRY_CODES_FILE = os.path.join(os.path.dirname(__file__), "Country_codes.xlsx")
+#COUNTRY_CODES_FILE = "C:\\Users\\nikhi\\Downloads\\Country_codes.xlsx"
+COUNTRY_CODES_FILE = os.path.join(os.path.dirname(__file__), "Country_codes.xlsx")
 external_country_to_dialing, external_all_codes = load_external_country_codes(COUNTRY_CODES_FILE)
 
 

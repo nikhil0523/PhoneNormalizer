@@ -6,6 +6,7 @@ from io import BytesIO
 import phonenumbers
 from phonenumbers import NumberParseException, PhoneNumberFormat
 
+
 # ---------------------------
 # Page setup
 # ---------------------------
@@ -16,6 +17,7 @@ Upload a file containing **Zip/PostalCode**, **Phone Number**, and **Country** c
 The app will automatically clean, validate, and correct phone numbers.  
 It uses internal country codes and a backup `Country_codes.xlsx` file.
 """)
+
 
 # ---------------------------
 # Load internal country codes
@@ -38,14 +40,20 @@ def load_internal_country_codes():
     all_codes = set(filter(None, d1["Dialing clean"].tolist()))
     return country_to_dialing, all_codes
 
+
 internal_country_to_dialing, internal_all_codes = load_internal_country_codes()
 
+
 # ---------------------------
-# Load external backup country codes (static developer file)
+# Load external backup country codes (developer file)
 # ---------------------------
 @st.cache_data
 def load_external_country_codes(file_path):
     try:
+        if not os.path.exists(file_path):
+            st.warning("⚠️ Country_codes.xlsx not found. Using only internal country codes.")
+            return {}, set()
+
         d1 = pd.read_excel(file_path)
         possible_dial_cols = [
             "International dialing", "Dialing Code", "Dialing code",
@@ -71,68 +79,67 @@ def load_external_country_codes(file_path):
         st.error(f"❌ Error loading Country_codes.xlsx: {e}")
         return {}, set()
 
+
 #COUNTRY_CODES_FILE = "C:\\Users\\nikhi\\Downloads\\Country_codes.xlsx"
 COUNTRY_CODES_FILE = os.path.join(os.path.dirname(__file__), "Country_codes.xlsx")
 external_country_to_dialing, external_all_codes = load_external_country_codes(COUNTRY_CODES_FILE)
+
 
 # ---------------------------
 # Normalize phone number
 # ---------------------------
 def normalize_number(number: str, country_clean: str):
+    # Handle missing or empty numbers
+    if not number or pd.isna(number) or not re.search(r"\d", str(number)):
+        return "", "Missing Number"
+
     correct_code = internal_country_to_dialing.get(country_clean)
     if not correct_code:
         correct_code = external_country_to_dialing.get(country_clean)
-
     if not correct_code:
-        return number, "❌ Unknown country"
+        return "", "❌ Unknown country"
 
     digits = "".join(c for c in str(number) if c.isdigit())
 
-    # 🇺🇸 Special handling for USA
+    # 🇺🇸 Special handling for USA (+1 NANP logic)
     if country_clean in ["united states", "usa"]:
         try:
-            cleaned = re.sub(r"[^\d]", "", str(number))
-            has_plus = str(number).strip().startswith("+")
-            region_hint = "US"
+            cleaned = re.sub(r"[^\d+]", "", str(number))
+            if not cleaned.startswith("+"):
+                cleaned = "+" + cleaned
 
-            def try_parse(num):
-                try:
-                    parsed = phonenumbers.parse(num, region_hint)
-                    if phonenumbers.is_valid_number_for_region(parsed, region_hint):
-                        return phonenumbers.format_number(parsed, PhoneNumberFormat.E164)
-                except NumberParseException:
-                    return None
-                return None
+            try:
+                parsed = phonenumbers.parse(cleaned, "US")
+            except NumberParseException:
+                parsed = None
 
-            formatted = try_parse(number)
-            if formatted:
-                if has_plus:
+            # ✅ any valid +1 NANP number (US, Canada, etc.)
+            if parsed and phonenumbers.is_valid_number(parsed):
+                if parsed.country_code == 1:
+                    formatted = phonenumbers.format_number(parsed, PhoneNumberFormat.E164)
                     return formatted, "✅ Valid & Matched"
-                return formatted, f"⚠️ Added country code → {correct_code}"
+                else:
+                    national = str(parsed.national_number)
+                    corrected = f"+1{national}"
+                    return corrected, "⚠️ Forced into US format"
 
-            formatted = try_parse("+" + cleaned)
-            if formatted:
-                if not has_plus:
-                    return formatted, f"⚠️ Added country code → {correct_code}"
-                return formatted, "✅ Valid & Matched"
+            # Manual fallback
+            digits = re.sub(r"\D", "", cleaned)
+            if not digits:
+                return "", "Missing Number"
 
-            if cleaned.startswith("001"):
-                corrected = f"+1{cleaned[3:]}"
-                formatted = try_parse(corrected)
-                if formatted:
-                    return formatted, f"⚠️ Added country code → {correct_code}"
+            if digits.startswith("1") and len(digits) == 11:
+                return f"+{digits}", "✅ Valid & Matched"
+            if len(digits) == 10:
+                return f"+1{digits}", "✅ Valid & Matched"
+            if len(digits) < 10:
+                return "", "Missing Number"
 
-            if cleaned.startswith("1"):
-                cleaned = cleaned[1:]
-            cleaned = cleaned[-10:]
-            corrected = f"+1{cleaned}"
-            formatted = try_parse(corrected)
-            if formatted:
-                return formatted, "⚠️ Forced into US format"
+            corrected = f"+1{digits[-10:]}"
             return corrected, "⚠️ Forced into US format"
 
         except Exception:
-            pass
+            return "", "Missing Number"
 
     # 🌍 Default logic for all other countries
     matched_code = None
@@ -141,32 +148,37 @@ def normalize_number(number: str, country_clean: str):
             matched_code = code
             break
 
-    # ✅ Improved correction logic to avoid over-trimming
+    if not digits:
+        return "", "Missing Number"
+
     if matched_code:
         remaining_digits = digits[len(matched_code):]
-
-        # Handle +1-based codes incorrectly mapped to another country
         if matched_code.startswith("1") and correct_code != "1":
             remaining_digits = digits[len("1"):]
-
         if matched_code == correct_code:
             corrected_number = f"+{digits}"
             verification = "✅ Valid & Matched"
-        elif matched_code != correct_code:
+        else:
             corrected_number = f"+{correct_code}{remaining_digits}"
             verification = f"🔄 Corrected from {matched_code} → {correct_code}"
     else:
         digits = digits.lstrip("0")
+        if not digits:
+            return "", "Missing Number"
         corrected_number = f"+{correct_code}{digits}"
         verification = f"⚠️ Added country code → {correct_code}"
 
     return corrected_number, verification
 
+
 # ---------------------------
 # File uploader
 # ---------------------------
 st.subheader("📂 Upload Your File")
-uploaded_data = st.file_uploader("Upload CSV or Excel with Zip/PostalCode, Phone Number, and Country", type=["csv", "xlsx"])
+uploaded_data = st.file_uploader(
+    "Upload CSV or Excel with Zip/PostalCode, Phone Number, and Country",
+    type=["csv", "xlsx"]
+)
 
 if uploaded_data:
     try:
@@ -197,8 +209,18 @@ if uploaded_data:
                 df.to_excel(writer, index=False, sheet_name="Normalized")
             excel_data = excel_buffer.getvalue()
 
-            st.download_button("⬇️ Download CSV", data=csv_data, file_name="normalized_numbers.csv", mime="text/csv")
-            st.download_button("⬇️ Download Excel", data=excel_data, file_name="normalized_numbers.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(
+                "⬇️ Download CSV",
+                data=csv_data,
+                file_name="normalized_numbers.csv",
+                mime="text/csv"
+            )
+            st.download_button(
+                "⬇️ Download Excel",
+                data=excel_data,
+                file_name="normalized_numbers.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
     except Exception as e:
         st.error(f"❌ Error reading file: {e}")

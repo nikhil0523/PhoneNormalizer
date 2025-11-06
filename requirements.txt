@@ -1,6 +1,7 @@
-streamlit==1.39.0
-pandas==2.2.2
-phonenumbers==8.13.37
-pycountry==24.6.1
-xlsxwriter==3.2.0
-openpyxl==3.1.5
+streamlit
+pandas
+phonenumbers
+pycountry
+openpyxl
+xlsxwriter
+

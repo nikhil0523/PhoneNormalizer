@@ -89,60 +89,62 @@ external_country_to_dialing, external_all_codes = load_external_country_codes(CO
 # Caribbean countries under NANP (+1)
 # ---------------------------
 caribbean_countries = {
-    "antigua and barbuda",
-    "the bahamas",
-    "bahamas",
-    "barbados",
-    "cuba",
-    "dominica",
-    "dominican republic",
-    "grenada",
-    "haiti",
-    "jamaica",
-    "saint kitts and nevis",
-    "st kitts and nevis",
-    "saint lucia",
-    "st lucia",
-    "saint vincent and the grenadines",
-    "st vincent and the grenadines",
-    "trinidad and tobago",
+    "antigua and barbuda", "the bahamas", "bahamas", "barbados", "cuba",
+    "dominica", "dominican republic", "grenada", "haiti", "jamaica",
+    "saint kitts and nevis", "st kitts and nevis", "saint lucia", "st lucia",
+    "saint vincent and the grenadines", "st vincent and the grenadines", "trinidad and tobago",
 }
 
 
 # ---------------------------
-# Formatting rules by country
+# Expected national number lengths per country
+# ---------------------------
+expected_lengths = {
+    "usa": 10, "united states": 10, "canada": 10, **{c: 10 for c in caribbean_countries},
+    "united kingdom": 10, "uk": 10, "gb": 10, "mexico": 10,
+    "australia": 9, "new zealand": 8, "india": 10, "brazil": 10,
+}
+
+
+# ---------------------------
+# Format by country
 # ---------------------------
 def format_by_country(e164_number: str, country_clean: str):
-    """Apply post-formatting rules based on company standards."""
     digits = re.sub(r"\D", "", e164_number)
     if not digits:
         return e164_number
 
-    # NANP: US, Canada, Caribbean (+1)
+    # normalize variants
+    normalized = country_clean.strip().lower()
+    if normalized in ["uk", "u.k.", "unitedkingdom", "gb"]:
+        normalized = "united kingdom"
+
+    # 🇺🇸 NANP format (US, Canada, Caribbean)
     if (
-        country_clean in ["united states", "usa", "canada"]
-        or country_clean in caribbean_countries
+        normalized in ["united states", "usa", "canada"]
+        or normalized in caribbean_countries
     ):
         national = digits[-10:]
         return f"+1-({national[:3]})-{national[3:6]}-{national[6:]}"
 
-    elif country_clean == "united kingdom":
+    # 🇬🇧 United Kingdom
+    elif normalized == "united kingdom":
         national = digits[2:] if digits.startswith("44") else digits
-        return f"+44-{national[:4]}-{national[4:7]}-{national[7:]}"
+        if len(national) >= 10:
+            part1 = national[:4]
+            part2 = national[4:7]
+            part3 = national[7:]
+            return f"+44-{part1}-{part2}-{part3}"
+        else:
+            return f"+44-{national}"
 
-    elif country_clean == "mexico":
+    # 🇲🇽 Mexico
+    elif normalized == "mexico":
         national = digits[2:] if digits.startswith("52") else digits
         return f"+52-{national[:3]}-{national[3:6]}-{national[6:]}"
 
-    elif country_clean == "australia":
-        national = digits[2:] if digits.startswith("61") else digits
-        return f"+61-{national[:1]}-{national[1:5]}-{national[5:]}"
-
-    elif country_clean == "new zealand":
-        national = digits[2:] if digits.startswith("64") else digits
-        return f"+64-{national[:1]}-{national[1:4]}-{national[4:]}"
-
-    elif country_clean == "india":
+    # 🇮🇳 India
+    elif normalized == "india":
         national = digits[2:] if digits.startswith("91") else digits
         if len(national) >= 10:
             std = national[:2]
@@ -151,113 +153,67 @@ def format_by_country(e164_number: str, country_clean: str):
         else:
             return f"+91-{national}"
 
-    elif country_clean == "brazil":
+    # 🇧🇷 Brazil
+    elif normalized == "brazil":
         national = digits[2:] if digits.startswith("55") else digits
         return f"+55-{national[:2]}-{national[2:6]}-{national[6:]}"
 
+    # 🇦🇺 Australia
+    elif normalized == "australia":
+        national = digits[2:] if digits.startswith("61") else digits
+        return f"+61-{national[:1]}-{national[1:5]}-{national[5:]}"
+
+    # 🇳🇿 New Zealand
+    elif normalized == "new zealand":
+        national = digits[2:] if digits.startswith("64") else digits
+        return f"+64-{national[:1]}-{national[1:4]}-{national[4:]}"
+
+    # fallback
     else:
-        # fallback – return unchanged E.164
         return e164_number
 
 
 # ---------------------------
-# Normalize phone number
+# Normalize and Validate
 # ---------------------------
 def normalize_number(number: str, country_clean: str):
-    # Handle missing or empty numbers
     if not number or pd.isna(number) or not re.search(r"\d", str(number)):
         return "", "Missing Number"
 
-    correct_code = internal_country_to_dialing.get(country_clean)
+    normalized_country = str(country_clean).strip().lower()
+    if normalized_country in ["uk", "u.k.", "unitedkingdom", "gb"]:
+        normalized_country = "united kingdom"
+
+    correct_code = (
+        internal_country_to_dialing.get(normalized_country)
+        or external_country_to_dialing.get(normalized_country)
+    )
     if not correct_code:
-        correct_code = external_country_to_dialing.get(country_clean)
-    if not correct_code:
-        return "", "❌ Unknown country"
+        return number, "❌ Unknown country"
 
-    digits = "".join(c for c in str(number) if c.isdigit())
-
-    # 🇺🇸 Special handling for NANP (USA/Canada/Caribbean)
-    if (
-        country_clean in ["united states", "usa", "canada"]
-        or country_clean in caribbean_countries
-    ):
-        try:
-            cleaned = re.sub(r"[^\d+]", "", str(number))
-            if not cleaned.startswith("+"):
-                cleaned = "+" + cleaned
-
-            try:
-                parsed = phonenumbers.parse(cleaned, "US")
-            except NumberParseException:
-                parsed = None
-
-            if parsed and phonenumbers.is_valid_number(parsed):
-                if parsed.country_code == 1:
-                    formatted = phonenumbers.format_number(parsed, PhoneNumberFormat.E164)
-                    display = format_by_country(formatted, country_clean)
-                    return display, "✅ Valid & Matched"
-                else:
-                    national = str(parsed.national_number)
-                    corrected = f"+1{national}"
-                    display = format_by_country(corrected, country_clean)
-                    return display, "⚠️ Forced into US/Caribbean format"
-
-            # Manual fallback
-            digits = re.sub(r"\D", "", cleaned)
-            if not digits:
-                return "", "Missing Number"
-
-            if digits.startswith("1") and len(digits) == 11:
-                formatted = f"+{digits}"
-                display = format_by_country(formatted, country_clean)
-                return display, "✅ Valid & Matched"
-            if len(digits) == 10:
-                formatted = f"+1{digits}"
-                display = format_by_country(formatted, country_clean)
-                return display, "✅ Valid & Matched"
-            if len(digits) < 10:
-                return "", "Missing Number"
-
-            corrected = f"+1{digits[-10:]}"
-            display = format_by_country(corrected, country_clean)
-            return display, "⚠️ Forced into US/Caribbean format"
-
-        except Exception:
-            return "", "Missing Number"
-
-    # 🌍 Default logic for all other countries
-    matched_code = None
-    for code in sorted(internal_all_codes.union(external_all_codes), key=lambda x: -len(x)):
-        if digits.startswith(code):
-            matched_code = code
-            break
-
+    digits = re.sub(r"\D", "", str(number))
     if not digits:
-        return "", "Missing Number"
+        return number, "Missing Number"
 
-    if matched_code:
-        remaining_digits = digits[len(matched_code):]
-        if matched_code.startswith("1") and correct_code != "1":
-            remaining_digits = digits[len("1"):]
-        if matched_code == correct_code:
-            corrected_number = f"+{digits}"
-            verification = "✅ Valid & Matched"
-        else:
-            corrected_number = f"+{correct_code}{remaining_digits}"
-            verification = f"🔄 Corrected from {matched_code} → {correct_code}"
-    else:
-        digits = digits.lstrip("0")
-        if not digits:
-            return "", "Missing Number"
+    # Generate corrected E.164-style number
+    if not digits.startswith(correct_code):
         corrected_number = f"+{correct_code}{digits}"
-        verification = f"⚠️ Added country code → {correct_code}"
+    else:
+        corrected_number = f"+{digits}"
 
-    display = format_by_country(corrected_number, country_clean)
-    return display, verification
+    formatted = format_by_country(corrected_number, normalized_country)
+
+    # ✅ Validate expected length — show "Missing Data" if short, but keep number
+    digits_only = re.sub(r"\D", "", formatted)
+    expected_len = expected_lengths.get(normalized_country)
+    if expected_len and len(digits_only) < (len(correct_code) + expected_len):
+        return formatted, "Missing Data"
+
+    return formatted, "✅ Valid & Matched"
 
 
 # ---------------------------
-# File uploader
+# Streamlit file uploader
 # ---------------------------
 st.subheader("📂 Upload Your File")
 uploaded_data = st.file_uploader(
@@ -267,11 +223,7 @@ uploaded_data = st.file_uploader(
 
 if uploaded_data:
     try:
-        if uploaded_data.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_data)
-        else:
-            df = pd.read_excel(uploaded_data)
-
+        df = pd.read_csv(uploaded_data) if uploaded_data.name.endswith(".csv") else pd.read_excel(uploaded_data)
         st.write("### Sample Data")
         st.dataframe(df.head())
 
@@ -281,8 +233,7 @@ if uploaded_data:
         else:
             df["Country_clean"] = df["Country"].astype(str).str.strip().str.lower()
             df[["Corrected Number", "Verification"]] = df.apply(
-                lambda x: pd.Series(normalize_number(x["Phone Number"], x["Country_clean"])),
-                axis=1
+                lambda x: pd.Series(normalize_number(x["Phone Number"], x["Country_clean"])), axis=1
             )
 
             st.success("✅ Normalization complete!")
@@ -294,17 +245,12 @@ if uploaded_data:
                 df.to_excel(writer, index=False, sheet_name="Normalized")
             excel_data = excel_buffer.getvalue()
 
-            st.download_button(
-                "⬇️ Download CSV",
-                data=csv_data,
-                file_name="normalized_numbers.csv",
-                mime="text/csv"
-            )
+            st.download_button("⬇️ Download CSV", data=csv_data, file_name="normalized_numbers.csv", mime="text/csv")
             st.download_button(
                 "⬇️ Download Excel",
                 data=excel_data,
                 file_name="normalized_numbers.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
     except Exception as e:

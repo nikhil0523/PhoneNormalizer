@@ -14,7 +14,7 @@ import base64
 st.set_page_config(page_title="📞 Phone Number Normalizer", layout="wide")
 
 # Load top banner
-with open(r"C:\Users\nikhi\Downloads\em eminenture.jpg", "rb") as f:
+with open("em eminenture.jpg", "rb") as f:
     banner_base64 = base64.b64encode(f.read()).decode()
 
 st.markdown(
@@ -129,7 +129,8 @@ def load_external_country_codes(path):
         return {}, set()
 
 
-COUNTRY_CODES_FILE = r"C:\Users\nikhi\Downloads\Country_codes.xlsx"
+#COUNTRY_CODES_FILE = r"C:\Users\nikhi\Downloads\Country_codes.xlsx"
+COUNTRY_CODES_FILE = os.path.join(os.path.dirname(__file__), "Country_codes.xlsx")
 external_codes, external_all = load_external_country_codes(COUNTRY_CODES_FILE)
 
 
